@@ -7,4 +7,4 @@ FROM openjdk:17-slim
 WORKDIR /app
 COPY --from=build /app/service-registry/target/service-registry-*.jar app.jar
 EXPOSE 8761
-ENTRYPOINT ["java", "-jar", "app.jar"] 
+ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -51,3 +51,6 @@ application-dev.properties
 Thumbs.db
 ehthumbs.db
 Desktop.ini 
+
+### Data ###
+data/

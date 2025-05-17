@@ -31,6 +31,7 @@ check_docker() {
 cleanup() {
     print_message "Cleaning up Docker environment..."
     docker-compose down -v
+    docker system prune -f
     print_message "Cleanup completed."
 }
 
@@ -43,27 +44,30 @@ start_services() {
 # Function to start services without rebuilding
 start_services_no_build() {
     print_message "Starting services without rebuilding..."
-    docker-compose up
+    docker-compose up -d
+}
+
+# Function to start services in background mode
+start_services_background() {
+    print_message "Starting services in background mode..."
+    docker-compose up -d --build
+    print_message "Services are running in background. Use './run.sh logs' to view logs."
 }
 
 # Function to build specific services
 build_services() {
-    if [ -z "$1" ]; then
-        print_error "Please specify at least one service name"
-        echo "Available services:"
-        echo "- postgres"
-        echo "- keycloak"
-        echo "- service-registry"
-        echo "- api-gateway"
-        echo "- identity-service"
-        echo "- product-service"
+    if [ $# -eq 0 ]; then
+        print_error "Please specify at least one service to build"
         exit 1
     fi
 
-    print_message "Building specified services..."
-    for service in "$@"
-    do
+    for service in "$@"; do
         print_message "Building $service..."
+        # Build Maven project first
+        cd $service
+        ./mvnw clean package -DskipTests
+        cd ..
+        # Then build Docker image
         docker-compose build $service
     done
     print_message "Build completed."
@@ -77,14 +81,25 @@ stop_services() {
 
 # Function to show logs
 show_logs() {
-    print_message "Showing logs for all services..."
-    docker-compose logs -f
+    if [ -z "$1" ]; then
+        print_message "Showing logs for all services..."
+        docker-compose logs -f
+    else
+        print_message "Showing logs for $1..."
+        docker-compose logs -f $1
+    fi
 }
 
-# Function to show logs for a specific service
-show_service_logs() {
+# Function to show status of all services
+show_services_status() {
+    print_message "Showing status of all services..."
+    docker-compose ps
+}
+
+# Function to rebuild specific services
+rebuild_services() {
     if [ -z "$1" ]; then
-        print_error "Please specify a service name"
+        print_error "Please specify at least one service name"
         echo "Available services:"
         echo "- postgres"
         echo "- keycloak"
@@ -94,25 +109,14 @@ show_service_logs() {
         echo "- product-service"
         exit 1
     fi
-    print_message "Showing logs for $1..."
-    docker-compose logs -f $1
-}
 
-# Function to restart a specific service
-restart_service() {
-    if [ -z "$1" ]; then
-        print_error "Please specify a service name"
-        echo "Available services:"
-        echo "- postgres"
-        echo "- keycloak"
-        echo "- service-registry"
-        echo "- api-gateway"
-        echo "- identity-service"
-        echo "- product-service"
-        exit 1
-    fi
-    print_message "Restarting $1..."
-    docker-compose restart $1
+    print_message "Rebuilding specified services..."
+    for service in "$@"
+    do
+        print_message "Rebuilding $service..."
+        docker-compose up -d --build --no-deps $service
+    done
+    print_message "Rebuild completed."
 }
 
 # Function to show help
@@ -122,7 +126,10 @@ show_help() {
     echo "Commands:"
     echo "  start       Build and start all services"
     echo "  up          Start all services without rebuilding"
+    echo "  start-bg    Start all services in background mode"
     echo "  build       Build specific services"
+    echo "  rebuild     Rebuild and restart specific services"
+    echo "  ps          Show status of all services"
     echo "  stop        Stop all services"
     echo "  restart     Restart all services"
     echo "  clean       Stop and remove all containers and volumes"
@@ -133,6 +140,7 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  ./run.sh build identity-service product-service"
+    echo "  ./run.sh rebuild api-gateway"
     echo "  ./run.sh logs keycloak"
     echo "  ./run.sh restart api-gateway"
 }
@@ -147,9 +155,19 @@ case "$1" in
     "up")
         start_services_no_build
         ;;
+    "start-bg")
+        start_services_background
+        ;;
     "build")
         shift  # Remove the first argument (build)
         build_services "$@"
+        ;;
+    "rebuild")
+        shift  # Remove the first argument (rebuild)
+        rebuild_services "$@"
+        ;;
+    "ps")
+        show_services_status
         ;;
     "stop")
         stop_services
@@ -162,18 +180,14 @@ case "$1" in
         cleanup
         ;;
     "logs")
-        if [ -z "$2" ]; then
-            show_logs
-        else
-            show_service_logs $2
-        fi
+        show_logs $2
         ;;
     "restart")
         if [ -z "$2" ]; then
             print_error "Please specify a service name"
             exit 1
         else
-            restart_service $2
+            docker-compose restart $2
         fi
         ;;
     "help"|"")

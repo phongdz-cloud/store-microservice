@@ -7,4 +7,4 @@ FROM openjdk:17-slim
 WORKDIR /app
 COPY --from=build /app/identity-service/target/identity-service-*.jar app.jar
 EXPOSE 8082
-ENTRYPOINT ["java", "-jar", "app.jar"] 
+ENTRYPOINT ["java", "-jar", "app.jar"]

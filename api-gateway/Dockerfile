@@ -7,4 +7,4 @@ FROM openjdk:17-slim
 WORKDIR /app
 COPY --from=build /app/api-gateway/target/api-gateway-*.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"] 
+ENTRYPOINT ["java", "-jar", "app.jar"]

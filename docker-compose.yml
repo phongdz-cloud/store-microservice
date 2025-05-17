@@ -5,34 +5,54 @@ services:
     image: postgres:latest
     container_name: postgres
     environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     networks:
       - microservice-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_SERVER_JSON_FILE: /servers.json
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - ./data/pgadmin:/var/lib/pgadmin
+      - ./servers.json:/servers.json
+    depends_on:
+      - postgres
+    networks:
+      - microservice-network
+    restart: unless-stopped
 
   init-db:
     image: postgres:latest
     depends_on:
       - postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST: postgres
+    volumes:
+      - ./postgres_init.sql:/docker-entrypoint-initdb.d/init.sql
     command: >
       bash -c "
         echo 'Waiting for postgres...' &&
-        while ! pg_isready -h postgres -p 5432 -U postgres; do
+        while ! pg_isready -h postgres -p ${POSTGRES_PORT} -U ${POSTGRES_USER}; do
           sleep 1
         done &&
         echo 'PostgreSQL started' &&
-        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE keycloak;' &&
-        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE identity_db;' &&
-        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE product_db;'
+        PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -f /docker-entrypoint-initdb.d/init.sql
       "
     networks:
       - microservice-network
@@ -41,14 +61,14 @@ services:
     image: quay.io/keycloak/keycloak:latest
     container_name: keycloak
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: postgres
-      KC_DB_PASSWORD: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:${POSTGRES_PORT}/${KEYCLOAK_DB}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "8080:8080"
+      - "${KEYCLOAK_PORT}:8080"
     command: start-dev
     depends_on:
       - postgres
@@ -62,7 +82,7 @@ services:
       dockerfile: service-registry/Dockerfile
     container_name: service-registry
     ports:
-      - "8761:8761"
+      - "${SERVICE_REGISTRY_PORT}:8761"
     networks:
       - microservice-network
 
@@ -72,12 +92,12 @@ services:
       dockerfile: api-gateway/Dockerfile
     container_name: api-gateway
     ports:
-      - "8085:8080"
+      - "${API_GATEWAY_PORT}:8080"
     depends_on:
       - service-registry
     environment:
-      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
-      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:${SERVICE_REGISTRY_PORT}/eureka/
+      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:${KEYCLOAK_PORT}
     networks:
       - microservice-network
 
@@ -87,15 +107,15 @@ services:
       dockerfile: identity-service/Dockerfile
     container_name: identity-service
     ports:
-      - "8082:8082"
+      - "${IDENTITY_SERVICE_PORT}:8082"
     depends_on:
       - service-registry
       - postgres
       - keycloak
     environment:
-      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/identity_db
-      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:${SERVICE_REGISTRY_PORT}/eureka/
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:${POSTGRES_PORT}/${IDENTITY_DB}
+      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:${KEYCLOAK_PORT}
     networks:
       - microservice-network
 
@@ -105,13 +125,47 @@ services:
       dockerfile: product-service/Dockerfile
     container_name: product-service
     ports:
-      - "8081:8081"
+      - "${PRODUCT_SERVICE_PORT}:8081"
     depends_on:
       - service-registry
       - postgres
     environment:
-      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_db
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:${SERVICE_REGISTRY_PORT}/eureka/
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:${POSTGRES_PORT}/${PRODUCT_DB}
+    networks:
+      - microservice-network
+
+  # Monitoring Services
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - microservice-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
     networks:
       - microservice-network
 
@@ -121,3 +175,5 @@ networks:
 
 volumes:
   postgres_data:
+  prometheus_data:
+  grafana_data:
