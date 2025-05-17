@@ -1,0 +1,123 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - microservice-network
+
+  init-db:
+    image: postgres:latest
+    depends_on:
+      - postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: postgres
+    command: >
+      bash -c "
+        echo 'Waiting for postgres...' &&
+        while ! pg_isready -h postgres -p 5432 -U postgres; do
+          sleep 1
+        done &&
+        echo 'PostgreSQL started' &&
+        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE keycloak;' &&
+        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE identity_db;' &&
+        PGPASSWORD=postgres psql -h postgres -U postgres -c 'CREATE DATABASE product_db;'
+      "
+    networks:
+      - microservice-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: postgres
+    ports:
+      - "8080:8080"
+    command: start-dev
+    depends_on:
+      - postgres
+      - init-db
+    networks:
+      - microservice-network
+
+  service-registry:
+    build:
+      context: .
+      dockerfile: service-registry/Dockerfile
+    container_name: service-registry
+    ports:
+      - "8761:8761"
+    networks:
+      - microservice-network
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8085:8080"
+    depends_on:
+      - service-registry
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
+    networks:
+      - microservice-network
+
+  identity-service:
+    build:
+      context: .
+      dockerfile: identity-service/Dockerfile
+    container_name: identity-service
+    ports:
+      - "8082:8082"
+    depends_on:
+      - service-registry
+      - postgres
+      - keycloak
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/identity_db
+      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
+    networks:
+      - microservice-network
+
+  product-service:
+    build:
+      context: .
+      dockerfile: product-service/Dockerfile
+    container_name: product-service
+    ports:
+      - "8081:8081"
+    depends_on:
+      - service-registry
+      - postgres
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_db
+    networks:
+      - microservice-network
+
+networks:
+  microservice-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
